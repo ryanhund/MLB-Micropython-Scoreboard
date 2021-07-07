@@ -114,6 +114,15 @@ def postponement_scoreboard(stats, daily_schedule, s, fd, ar, g):
     bottom_line = '{} {}'.format(stats['game_date_local'], stats['game_time_local'])
     fd.print_str(bottom_line,14,49)
 
+from config import chosen_team, team_abbreviations
+def no_game_scoreboard(stats, s, fd, ar, g):
+    opposing_id = int(stats['away_id'] if stats['home_id'] == chosen_team else stats['home_id'])
+    opposing_team = team_abbreviations[opposing_id]
+
+    fd.print_str('No game today :(', 2, 17)
+    fd.print_str('Next game: {}'.format(stats['game_date_local']), 2, 33)
+    fd.print_str('vs {}, {}'.format(opposing_team, stats['game_time_local']), 2, 49)
+
 
 def scalable_text(text,xpos,ypos,frame_buffer,max_width=79):
     fd_variable = FontDrawer(frame_buffer=frame_buffer, font_name = 'dejav_m15')

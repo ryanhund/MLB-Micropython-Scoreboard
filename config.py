@@ -41,7 +41,42 @@ team = {
     'brewers':158
 }
 
-chosen_team = team['padres'] #Edit this with your chosen team
+chosen_team = team['padres']
+
+# Edit this if you prefer different abbreviations
+team_abbreviations = {
+    108:'LAA',
+    109:'ARI',
+    110:'BAL',
+    111:'BOS',
+    112:'CHC',
+    113:'CIN',
+    114:'CLE',
+    115:'COL',
+    116:'DET',
+    117:'HOU',
+    118:'KAN',
+    119:'LAD',
+    120:'WAS',
+    121:'NYM',
+    133:'OAK',
+    134:'PIT',
+    135:'SD',
+    136:'SEA',
+    137:'SF',
+    138:'STL',
+    139:'TB',
+    140:'TEX',
+    141:'TOR',
+    142:'MIN',
+    143:'PHI',
+    144:'ATL',
+    145:'CWS',
+    146:'FLA',
+    147:'NYY',
+    158:'MIL'
+}
+
 
 time_settings = {
     'host':'time.google.com'
@@ -54,4 +89,4 @@ time_offsets = {
     'EDT':-4
 }
 
-chosen_tz = time_offsets['PDT'] #Edit this with your local time zone (CONUS only)
+chosen_tz = time_offsets['PDT']

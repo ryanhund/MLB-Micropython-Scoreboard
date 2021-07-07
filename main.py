@@ -5,16 +5,23 @@ import uasyncio
 -----------------------------'''
 
 from ustats import schedule
-async def gameday_state(datetime, lock, max_retries=5, wait_time=60):
+async def gameday_state(datetime, lock, log, max_retries=5, wait_time=60):
     # pre-game (using datetime) live updates -> during game (using global stats) -> postgame (static)
     global daily_schedule
     daily_schedule = {}
-    old_status = 'Scheduled'
     
     while True:
         await lock.acquire()
-        print('Gameday state function acquired schedule lock')
-        game_data = schedule()
+        log.info('Gameday state function acquired schedule lock')
+        try:
+            game_data = schedule()
+        except Exception as e:
+            log.error('Failed to get game schedule data. Retrying in {} seconds.'.format(wait_time))
+            log.error(e)
+            log.info('Gameday state function released schedule lock')
+            lock.release()
+            continue
+
         # if game_data['game_status'] == 'Scheduled' and old_status == 'Postgame':
         #     from machine import reset 
         #     reset()
@@ -34,41 +41,41 @@ async def gameday_state(datetime, lock, max_retries=5, wait_time=60):
             try:
                 gmt_mo,gmt_d,h,m = datetime.get_datetime_gmt()[1:5]
             except TypeError:
-                print('Failed to get date/time. Retrying in {} seconds.'.format(wait_time))
-                print('Gameday state function released schedule lock')
+                log.error('Failed to get date/time. Retrying in {} seconds.'.format(wait_time))
+                log.info('Gameday state function released schedule lock')
                 lock.release()
                 continue
             current_time_min = (60*h) + m + (24 * 60 * gmt_d) + (24 * 60 * 30 * gmt_mo)
-            print('Current time GMT: {}:{}, day: {}, minute-form: {}'.format(h,m,gmt_d,current_time_min))
+            log.info('Current time GMT: {}:{}, day: {}, minute-form: {}'.format(h,m,gmt_d,current_time_min))
 
             game_mo,game_d,h,m = daily_schedule['game_datetime'][1:5]
             game_time_min = (60*h) + m + (24 * 60 * game_d) + (24 * 60 * 30 * game_mo)
-            print('Game time GMT: {}:{}, day: {}, minute-form: {}'.format(h,m, game_d,game_time_min))
+            log.info('Game time GMT: {}:{}, day: {}, minute-form: {}'.format(h,m, game_d,game_time_min))
 
 
             if (current_time_min < (game_time_min - 10)) and (daily_schedule['game_status'] != 'Postponed'):
-                print('state = pregame')
+                log.info('state = pregame')
                 daily_schedule['gameday_state'] = 'Pregame'
                 
             else:
                 
                 if daily_schedule['game_status'] == 'Scheduled' or daily_schedule['game_status'] == 'Warmup':
-                    print('state = immediate pregame')
+                    log.info('state = immediate pregame')
                     daily_schedule['gameday_state'] = 'Immediate Pregame'
                 elif daily_schedule['game_status'] == 'In Progress':
-                    print('state = in progress')
+                    log.info('state = in progress')
                     daily_schedule['gameday_state'] = 'In Progress'
                 elif daily_schedule['game_status'] == 'Game Over':
-                    print('state = game over/postgame')
+                    log.info('state = game over/postgame')
                     daily_schedule['gameday_state'] = 'Postgame'
                 elif daily_schedule['game_status'] == 'Postponed':
-                    print('state = game postponed')
+                    log.info('state = game postponed')
                     daily_schedule['gameday_state'] = 'Postponed'
                 else:
-                    print('state unknown, reverting to postgame')
+                    log.warning('state unknown, reverting to postgame')
                     daily_schedule['gameday_state'] = 'Postgame'
 
-        print('Gameday state function released schedule lock')
+        log.info('Gameday state function released schedule lock')
         lock.release()
         old_status = game_data['game_status']
         await uasyncio.sleep(wait_time)
@@ -170,14 +177,25 @@ def do_connect(ssid, password, sta_if):
     print('network config:', sta_if.ifconfig())
 
 
-async def periodic_reset(lock):
-    global daily_schedule
+async def periodic_reset():
     while True:
         hour = 60*60
         await uasyncio.sleep(hour) #This is at the beginning of the function to prevent a boot loop
 
-        from machine import soft_reset
-        soft_reset()
+        from machine import reset
+        reset()
+
+import logging
+def logger():
+    logging.basicConfig(level=logging.INFO)
+    log = logging.getLogger("Main")
+    logging.getLogger().addHandler(Handler())
+    return log
+
+#borrowed from https://github.com/micropython/micropython-lib/blob/master/python-stdlib/logging/example_logging.py
+class Handler(logging.Handler):
+    def emit(self, record):
+        print("%(levelname)s: %(message)s" % record.__dict__)
 
 
 
@@ -194,18 +212,18 @@ async def display_initializer(lock):
     print ('Display initializer released display lock.')
     return s,fd,ar,g
 
-from display import live_scoreboard, pregame_scoreboard, postgame_scoreboard, postponement_scoreboard
-from ustats import live_game_events, upcoming_game_events, postgame_events, upcoming_game_hitters, postponed_game_events
-async def display_update_loop(s, fd, ar, g, schedule_lock, display_lock, max_retries=5):
+from display import live_scoreboard, pregame_scoreboard, postgame_scoreboard, postponement_scoreboard, no_game_scoreboard
+from ustats import live_game_events, upcoming_game_events, postgame_events, upcoming_game_hitters, postponed_game_events, next_game
+async def display_update_loop(s, fd, ar, g, schedule_lock, display_lock, log, max_retries=5):
     global daily_schedule
     hitter_stats = {}
     stats = {}
 
     while True:
         await display_lock.acquire()
-        print('Display buffer acquired display lock.')
+        log.info('Display buffer acquired display lock.')
         await schedule_lock.acquire()
-        print('Display buffer acquired schedule lock.')
+        log.info('Display buffer acquired schedule lock.')
         if daily_schedule.get('is_baseball'):
             if daily_schedule.get('gameday_state') == 'In Progress':
 
@@ -217,44 +235,44 @@ async def display_update_loop(s, fd, ar, g, schedule_lock, display_lock, max_ret
                         stats = live_game_events(daily_schedule['gamePk']) #retrieve game stats
                         break 
                     except MemoryError:
-                        print('Not enough memory for HTTP requests, collecting garbage...')
+                        log.error('Not enough memory for HTTP requests, collecting garbage...')
                         gc.collect()
                     except OSError:
-                        print('Error retrieving game information, retrying...')
+                        log.error('Error retrieving game information, retrying...')
                         await uasyncio.sleep(1)
                     except IndexError as e:
-                        print('Error retrieving game information, retrying...')
-                        print(e)
+                        log.error('Error retrieving game information, retrying...')
+                        log.error(e)
                         await uasyncio.sleep(1)
                     except Exception as e:
-                        print('Unspecified error retrieving game stats, retrying')
-                        print(e)
+                        log.error('Unspecified error retrieving game stats, retrying')
+                        log.error(e)
                         break
 
                 for i in range(max_retries):
                     if not hitter_stats.get('ID{}'.format(stats['batter_id'])):       #fallback retrieve hitter stats, should only run once
                         try:
-                            print('Retrieving pregame hitter stats')
+                            log.info('Retrieving pregame hitter stats')
                             gc.collect()
                             hitter_stats = upcoming_game_hitters(daily_schedule['gamePk'])
                             gc.collect()
                             break
                         except MemoryError:
-                            print('Not enough memory for HTTP requests, collecting garbage...')
+                            log.error('Not enough memory for HTTP requests, collecting garbage...')
                             gc.collect()
                         except OSError:
-                            print('Error retrieving hitter information, retrying...')
+                            log.error('Error retrieving hitter information, retrying...')
                             await uasyncio.sleep(1)
                         except Exception:
-                            print('Unspecified error retrieving hitter stats, retrying')
+                            log.error('Unspecified error retrieving hitter stats, retrying')
                             break
                 
                 if not stats:
                     await uasyncio.sleep(15)
                     display_lock.release()
-                    print('Display buffer released display lock.')
+                    log.info('Display buffer released display lock.')
                     schedule_lock.release()
-                    print('Display buffer released schedule lock.')
+                    log.info('Display buffer released schedule lock.')
                     continue
 
                 for i in range(max_retries):
@@ -262,11 +280,11 @@ async def display_update_loop(s, fd, ar, g, schedule_lock, display_lock, max_ret
                         live_scoreboard(stats,hitter_stats,s,fd,ar,g) #fill buffer
                         break
                     except MemoryError:
-                        print('Display buffer out of memory, collecting garbage...')
+                        log.error('Display buffer out of memory, collecting garbage...')
                         gc.collect()
                     except Exception as e:
-                        print('Unspecified error writing to display buffer, retrying')
-                        print(e)
+                        log.error('Unspecified error writing to display buffer, retrying')
+                        log.error(e)
                         break
 
                 s.show() #push buffer to display, should change to another function later
@@ -285,14 +303,14 @@ async def display_update_loop(s, fd, ar, g, schedule_lock, display_lock, max_ret
                             gc.collect()
                         break 
                     except MemoryError:
-                        print('Not enough memory for HTTP request, collecting garbage...')
+                        log.error('Not enough memory for HTTP request, collecting garbage...')
                         gc.collect()
                     except OSError:
-                        print('Error retrieving game information, retrying...')
+                        log.error('Error retrieving game information, retrying...')
                         await uasyncio.sleep(1)
                     except Exception as e:
-                        print('Unspecified error retrieving pregame stats, retrying')
-                        print(e)
+                        log.error('Unspecified error retrieving pregame stats, retrying')
+                        log.error(e)
                         break
 
                 for i in range(max_retries):
@@ -300,11 +318,11 @@ async def display_update_loop(s, fd, ar, g, schedule_lock, display_lock, max_ret
                         pregame_scoreboard(stats,daily_schedule,s,fd,ar,g,immediate_pregame=(daily_schedule.get('gameday_state') == 'Immediate Pregame')) #fill buffer
                         break
                     except MemoryError:
-                        print('Display buffer out of memory, collecting garbage...')
+                        log.error('Display buffer out of memory, collecting garbage...')
                         gc.collect()
                     except Exception as e:
-                        print('Unspecified error writing to display buffer, retrying')
-                        print(e)
+                        log.error('Unspecified error writing to display buffer, retrying')
+                        log.error(e)
                         break
                 
                 s.show() #push buffer to display, should change to another function later
@@ -320,14 +338,14 @@ async def display_update_loop(s, fd, ar, g, schedule_lock, display_lock, max_ret
                         stats = postgame_events(daily_schedule['gamePk']) #retrieve game stats
                         break 
                     except MemoryError:
-                        print('Not enough memory for HTTP request, collecting garbage...')
+                        log.error('Not enough memory for HTTP request, collecting garbage...')
                         gc.collect()
                     except OSError:
-                        print('Error retrieving game information, retrying...')
+                        log.error('Error retrieving game information, retrying...')
                         await uasyncio.sleep(1)
                     except Exception as e:
-                        print('Unspecified error retrieving postgame stats, retrying')
-                        print(e)
+                        log.error('Unspecified error retrieving postgame stats, retrying')
+                        log.error(e)
                         break
 
                 for i in range(max_retries):
@@ -335,11 +353,11 @@ async def display_update_loop(s, fd, ar, g, schedule_lock, display_lock, max_ret
                         postgame_scoreboard(stats,s,fd,ar,g) #fill buffer
                         break
                     except MemoryError:
-                        print('Display buffer out of memory, collecting garbage...')
+                        log.error('Display buffer out of memory, collecting garbage...')
                         gc.collect()
                     except Exception as e:
-                        print('Unspecified error writing to display buffer, retrying')
-                        print(e)
+                        log.error('Unspecified error writing to display buffer, retrying')
+                        log.error(e)
                         break
                 
                 s.show() #push buffer to display, should change to another function later
@@ -354,37 +372,41 @@ async def display_update_loop(s, fd, ar, g, schedule_lock, display_lock, max_ret
                         stats = postponed_game_events(daily_schedule['gamePk']) #retrieve game stats
                         break 
                     except MemoryError:
-                        print('Not enough memory for HTTP request, collecting garbage...')
+                        log.error('Not enough memory for HTTP request, collecting garbage...')
                         gc.collect()
                     except OSError:
-                        print('Error retrieving game information, retrying...')
+                        log.error('Error retrieving game information, retrying...')
                         await uasyncio.sleep(1)
                     except Exception as e:
-                        print('Unspecified error retrieving postgame stats, retrying')
-                        print(e)
+                        log.error('Unspecified error retrieving postgame stats, retrying')
+                        log.error(e)
                         break
                 for i in range(max_retries):
                     try:
                         postponement_scoreboard(stats, daily_schedule,s,fd,ar,g) #fill buffer
                         break
                     except MemoryError:
-                        print('Display buffer out of memory, collecting garbage...')
+                        log.error('Display buffer out of memory, collecting garbage...')
                         gc.collect()
                     except Exception as e:
-                        print('Unspecified error writing to display buffer, retrying')
-                        print(e)
+                        log.error('Unspecified error writing to display buffer, retrying')
+                        log.error(e)
                         break
                 
                 s.show() #push buffer to display, should change to another function later
 
         else: #If no game that day
             s.fill(0)
+
+            stats = upcoming_game_events(next_game())
+            no_game_scoreboard(stats, s, fd, ar, g)
+
             s.show()
             
         display_lock.release()
-        print('Display buffer released display lock.')
+        log.info('Display buffer released display lock.')
         schedule_lock.release()
-        print('Display buffer released schedule lock.')
+        log.info('Display buffer released schedule lock.')
         await uasyncio.sleep(15)
 
 ''' ----------------------------
@@ -394,6 +416,8 @@ async def display_update_loop(s, fd, ar, g, schedule_lock, display_lock, max_ret
 from uasyncio import Lock
 from boot import sta_if
 async def main():
+    log = logger()
+
     datetime = Time()                # Initialize time object
     schedule_lock = uasyncio.Lock()  # Initialize schedule lock object
     display_lock  = uasyncio.Lock()  # Initialize display lock object (prevent access to display until it has initialized)
@@ -402,11 +426,11 @@ async def main():
 
     loop = uasyncio.get_event_loop() # Create event loop
     # loop.create_task(get_gameday(datetime=datetime, lock=schedule_lock)) 
-    loop.create_task(gameday_state(datetime=datetime, lock=schedule_lock))
-    loop.create_task(display_update_loop(s, fd, ar, g, schedule_lock=schedule_lock, display_lock=display_lock))
+    loop.create_task(gameday_state(datetime=datetime, lock=schedule_lock, log=log))
+    loop.create_task(display_update_loop(s, fd, ar, g, schedule_lock=schedule_lock, display_lock=display_lock, log=log))
     loop.create_task(collect_garbage())
     loop.create_task(check_connection(sta_if))
-    loop.create_task(periodic_reset(schedule_lock))
+    loop.create_task(periodic_reset())
     await loop.run_forever()
 
 def run():

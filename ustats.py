@@ -74,7 +74,7 @@ from config import chosen_tz
 def upcoming_game_events(gamePk):
 
     #Generate fields of interest
-    field ='gameData,teams,away,home,record,leagueRecord,wins,losses,probablePitchers,fullName,venue,name,datetime,time,ampm,timeZone,offset'
+    field ='gameData,teams,away,home,id,record,leagueRecord,wins,losses,probablePitchers,fullName,venue,name,datetime,time,ampm,originalDate,timeZone,offset'
 
     url = 'https://statsapi.mlb.com/api/v1.1/game/{}/feed/live?fields={}'.format(gamePk,field)
     # url = url + '&fields=' + field
@@ -83,7 +83,9 @@ def upcoming_game_events(gamePk):
     output = {}   #Formatted dictionary for use in drawing
 
     output['home_team'] = response['gameData']['teams']['home'].get('name')
+    output['home_id'] = response['gameData']['teams']['home'].get('id')
     output['away_team'] = response['gameData']['teams']['away'].get('name')
+    output['away_id'] = response['gameData']['teams']['away'].get('id')
     output['home_record'] = '{}-{}'.format(response['gameData']['teams']['home']['record']['leagueRecord'].get('wins'),response['gameData']['teams']['home']['record']['leagueRecord'].get('losses'))
     output['away_record'] = '{}-{}'.format(response['gameData']['teams']['away']['record']['leagueRecord'].get('wins'),response['gameData']['teams']['away']['record']['leagueRecord'].get('losses'))
     # home_pitcher = response['gameData']['probablePitchers']['home'].get('fullName')
@@ -105,6 +107,11 @@ def upcoming_game_events(gamePk):
     elif gametime_m == 0:
         gametime_m = '00'
     output['game_time_local'] = '{}:{} {}'.format(gametime_h,gametime_m, ampm)
+
+    #get date
+    _, gametime_mo, gametime_d = tuple(response['gameData']['datetime'].get('originalDate').split('-'))
+    gametime_mo, gametime_d = int(gametime_mo), int(gametime_d)
+    output['game_date_local'] = '{}/{}'.format(gametime_mo, gametime_d)
     return output
 
 def postgame_events(gamePk):
@@ -191,3 +198,13 @@ def postponed_game_events(gamePk):
     gametime_mo, gametime_d = int(gametime_mo), int(gametime_d)
     output['game_date_local'] = '{}/{}'.format(gametime_mo, gametime_d)
     return output
+
+def next_game(team=chosen_team):
+    fields = 'hydrate=nextSchedule&fields=teams,id,teamName,nextGameSchedule,dates,date,games,gamePk,season,gameDate,teams,away,home,team,name,teamName'
+    url = 'https://statsapi.mlb.com/api/v1/teams/{}?{}'.format(team,fields)
+
+    response = requests.get(url).json()
+
+    gamePk = response["teams"][0]["nextGameSchedule"]["dates"][0]["games"][0].get('gamePk')
+
+    return gamePk
